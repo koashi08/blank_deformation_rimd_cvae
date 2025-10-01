@@ -2,11 +2,11 @@
 
 ## 0. 概要
 
-- **目的**：1step 解析のブランク展開に対し、逐次解析（正解）との**座標誤差** \(\delta u_i=(\Delta x_i,\Delta y_i)\) を**直接**予測し、  
-  \(X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\widehat{\delta u}\) で補正形状を得る。  
-- **入力**：1step の **RIMD特徴**（辺の回転差ログ \(\phi_{ij}\in\mathbb{R}^3\)、頂点の \(\log S_i\in\mathbb{R}^6\)）＋補助幾何。  
-- **出力**：頂点ごとの 2D 変位 \(\delta u\)（標準化後の値）。  
-- **前提**：節点対応は一致、座標系は統一（x中心0 / y片端0 / z=0）、規模は **V=1071**、Eは概ね \(\approx 2V\)。  
+- **目的**：1step 解析のブランク展開に対し、逐次解析（正解）との**座標誤差** $\delta u_i=(\Delta x_i,\Delta y_i)$ を**直接**予測し、  
+  $X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\widehat{\delta u}$ で補正形状を得る。  
+- **入力**：1step の **RIMD特徴**（辺の回転差ログ $\phi_{ij}\in\mathbb{R}^3$、頂点の $\log S_i\in\mathbb{R}^6$）＋補助幾何。  
+- **出力**：頂点ごとの 2D 変位 $\delta u$（標準化後の値）。  
+- **前提**：節点対応は一致、座標系は統一（x中心0 / y片端0 / z=0）、規模は **V=1071**、Eは概ね $\approx 2V$。  
 - **ねらい**：RIMDの**回転不変**・**局所性**を活かして学習を安定化しつつ、再構成ソルバ無しで**高速推論**。
 
 ---
@@ -18,11 +18,11 @@
 
 2) **ターゲットは座標誤差（Δx,Δy）**  
    - 直接加算で補正完了、ARAP/Poisson系の再構成不要 → **実装がシンプル**・**推論が高速**。  
-   - ターゲット次元が \(2V\) と低めで**少データ（100ケース）でも安定**。
+   - ターゲット次元が $2V$ と低めで**少データ（100ケース）でも安定**。
 
 3) **順列不変な条件エンコーダ＋ノード共有デコーダ**  
-   - 辺・頂点特徴を小MLPで埋め込み、**mean-pool**でグローバル条件 \(h_c\)。  
-   - 各頂点は \([\text{node\_feat}_i; h_c]\) から**同一MLP**で \(\delta u_i\) を出力 → パラメタ節約。
+   - 辺・頂点特徴を小MLPで埋め込み、**mean-pool**でグローバル条件 $h_c$。  
+   - 各頂点は $[\text{node\_feat}_i; h_c]$ から**同一MLP**で $\delta u_i$ を出力 → パラメタ節約。
 
 4) **軽い幾何正則化**  
    - 予測変位場の**ラプラシアン平滑化**と**ドリフト抑制**で非物理なギザギザ／一様平行移動を回避。  
@@ -38,14 +38,14 @@
 
 ### 2.1 三角化と RIMD 算出
 - 四角形メッシュは**一貫規約の対角線**で三角化（全ケース同一規約）。  
-- ブランク展開形状→製品形状の対で、各頂点の**変形勾配** \(T_i\) を cotan 重み一環最小二乗で推定、**極分解** \(T_i=R_iS_i\)。  
+- ブランク展開形状→製品形状の対で、各頂点の**変形勾配** $T_i$ を cotan 重み一環最小二乗で推定、**極分解** $T_i=R_iS_i$。  
 - ノード単位の座標値(1step法:step_blk_coord_x/step_prod_coord_x, 逐次解析:nv_blk_coord_x/nv_prod_coord_x 等)、要素単位の構成情報データ(ElementID n1 n2 n3 n4)はそれぞれ.pkl形式で保存済み。
 - **RIMD**：  
-  - 辺：\(\phi_{ij}=\log(R_i^\top R_j)\in\mathbb{R}^3\)  
-  - 頂点：\(\sigma_i=\log S_i\in\mathbb{R}^6\)
+  - 辺：$\phi_{ij}=\log(R_i^\top R_j)\in\mathbb{R}^3$  
+  - 頂点：$\sigma_i=\log S_i\in\mathbb{R}^6$
 
 ### 2.2 ターゲット（座標誤差）
-- \(\delta u_i=(x^{nv}_i-x^{1step}_i,\; y^{nv}_i-y^{1step}_i)\)
+- $\delta u_i=(x^{nv}_i-x^{1step}_i,\; y^{nv}_i-y^{1step}_i)$
 
 ### 2.3 入出力テンソル（ケース No001 の例）
 ```
@@ -61,42 +61,42 @@
 ```
 
 ### 2.4 標準化（データセット基準）
-1. **代表寸法 \(S\)**：train の 1step 座標から BB 対角長の**中央値**を採用（データセット一定）。  
-   \(\tilde{\delta u}=\delta u/S\) で粗スケーリング（数値安定・相似性付与）。
+1. **代表寸法 $S$**：train の 1step 座標から BB 対角長の**中央値**を採用（データセット一定）。  
+   $\tilde{\delta u}=\delta u/S$ で粗スケーリング（数値安定・相似性付与）。
 2. **Z標準化**（train で fit、全 split に適用）：  
-   - 辺：\([\phi,\text{geo\_edge}]\ \Rightarrow\ (\mu_e,\sigma_e)\)  
-   - 頂点：\([\sigma,\text{geo\_node}]\ \Rightarrow\ (\mu_v,\sigma_v)\)  
-   - ターゲット：\(\tilde{\delta u}\ \Rightarrow\ (\mu_y,\sigma_y)\)  
-3. **逆変換**（推論）：\(\widehat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)\)
+   - 辺：$[\phi,\text{geo\_edge}]\ \Rightarrow\ (\mu_e,\sigma_e)$  
+   - 頂点：$[\sigma,\text{geo\_node}]\ \Rightarrow\ (\mu_v,\sigma_v)$  
+   - ターゲット：$\tilde{\delta u}\ \Rightarrow\ (\mu_y,\sigma_y)$  
+3. **逆変換**（推論）：$\widehat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$
 
-> スケーラは 保存（\(\mu,\sigma,S\)）。辺・頂点・ターゲットで**別々**に管理。
+> スケーラは 保存（$\mu,\sigma,S$）。辺・頂点・ターゲットで**別々**に管理。
 
 ---
 
 ## 3. モデル設計
 
 ### 3.1 入力特徴
-- **エッジ特徴**：\([\ \phi^{1step}_{ij}\ (3);\ \text{geo\_edge}_{ij}\ (Ge)\ ]\)  
-- **ノード特徴**：\([\ \sigma^{1step}_i\ (6);\ \text{geo\_node}_i\ (Gn);\ \bar{\phi}^{1step}_i\ (3);\ (x^{1step}_i,y^{1step}_i)\ (2)\ ]\)  
-  - \(\bar{\phi}^{1step}_i\)：頂点 i の一環辺 \(\phi\) の平均（近傍曲げ強度の簡易要約）。
+- **エッジ特徴**：$[\ \phi^{1step}_{ij}\ (3);\ \text{geo\_edge}_{ij}\ (Ge)\ ]$  
+- **ノード特徴**：$[\ \sigma^{1step}_i\ (6);\ \text{geo\_node}_i\ (Gn);\ \bar{\phi}^{1step}_i\ (3);\ (x^{1step}_i,y^{1step}_i)\ (2)\ ]$  
+  - $\bar{\phi}^{1step}_i$：頂点 i の一環辺 $\phi$ の平均（近傍曲げ強度の簡易要約）。
 
 ### 3.2 ベースライン（非VAE：条件付き回帰 MLP）
-- **Edge-Enc-MLP**：in=(3+Ge) → 128（GELU＋LayerNorm）→ **mean-pool** → \(h_e\in\mathbb{R}^{128}\)
-- **Node-Enc-MLP**：in=(6+Gn+3+2) → 128 → **mean-pool** → \(h_v\in\mathbb{R}^{128}\)
-- **Global-MLP**：\([h_e;h_v]\) → \(h_c\in\mathbb{R}^{128}\)
-- **Node-Head-MLP（共有）**：\([\text{node\_feat}_i;h_c]\) → 128 → 128 → 64 → **2**
-  - 出力は**標準化後**の \(\tilde{\delta u}_{\text{std}}\)。Dropout0.1、LayerNorm、最終層は線形。
+- **Edge-Enc-MLP**：in=(3+Ge) → 128（GELU＋LayerNorm）→ **mean-pool** → $h_e\in\mathbb{R}^{128}$
+- **Node-Enc-MLP**：in=(6+Gn+3+2) → 128 → **mean-pool** → $h_v\in\mathbb{R}^{128}$
+- **Global-MLP**：$[h_e;h_v]$ → $h_c\in\mathbb{R}^{128}$
+- **Node-Head-MLP（共有）**：$[\text{node\_feat}_i;h_c]$ → 128 → 128 → 64 → **2**
+  - 出力は**標準化後**の $\tilde{\delta u}_{\text{std}}$。Dropout0.1、LayerNorm、最終層は線形。
   - **Residual Connection**: Node特徴の元次元に射影してresidual接続を追加（勾配流改善）
 
-> 置換案：GNN（GraphSAGE/GCN 2–3層）＋ FiLM（後述の \(g\) で層を変調）。最初は MLP 推奨。
+> 置換案：GNN（GraphSAGE/GCN 2–3層）＋ FiLM（後述の $g$ で層を変調）。最初は MLP 推奨。
 > **アテンション機構**: 重要な近傍特徴を選択的に重み付けするself-attention層の検討。
 
 ### 3.3 CVAE 拡張
-- **Encoder（学習時のみ）**：\(\tilde{\delta u}\) を小MLP(32→64)で埋め、**mean-pool** → \(u\in\mathbb{R}^{64}\)。  
-  \([u;h_c]\) → MLP(256→128) → **\(\mu,\log\sigma^2\in\mathbb{R}^{d_z}\)**、\(d_z=8\sim16\)。  
-- **Decoder**：\([z;h_c]\) → **Context-MLP** → \(g\in\mathbb{R}^{128}\)、  
-  各頂点で \([\text{node\_feat}_i;g]\) → Node-Head-MLP → \(\tilde{\delta u}_{\text{std}}\)。  
-- **条件付き事前** \(p(z|c)\)：必要時に \(\mu_0(c),\sigma_0(c)\) を小MLPで作る（後回しで可）。
+- **Encoder（学習時のみ）**：$\tilde{\delta u}$ を小MLP(32→64)で埋め、**mean-pool** → $u\in\mathbb{R}^{64}$。  
+  $[u;h_c]$ → MLP(256→128) → **$\mu,\log\sigma^2\in\mathbb{R}^{d_z}$**、$d_z=8\sim16$。  
+- **Decoder**：$[z;h_c]$ → **Context-MLP** → $g\in\mathbb{R}^{128}$、  
+  各頂点で $[\text{node\_feat}_i;g]$ → Node-Head-MLP → $\tilde{\delta u}_{\text{std}}$。  
+- **条件付き事前** $p(z|c)$：必要時に $\mu_0(c),\sigma_0(c)$ を小MLPで作る（後回しで可）。
 - **3.2 ベースライン（非VAE：条件付き回帰 MLP）**と**3.3 CVAE 拡張**はフラグ一つで切り替え可能にできるよう実装する。
 
 ---
@@ -104,47 +104,47 @@
 ## 4. 損失関数
 
 ### 4.1 基本
-- **再構成（主）**：**Huber**（標準化後のスケールで \(\delta=1.0\) 目安）  
-  \[
+- **再構成（主）**：**Huber**（標準化後のスケールで $\delta=1.0$ 目安）  
+  $$
   L_{\text{rec}}=\sum_i \rho\!\big(\widehat{\tilde{\delta u}}_{i,\text{std}}-\tilde{\delta u}_{i,\text{std}}\big)
-  \]
+  $$
 - **ラプラシアン平滑化**（逆標準化後の mm 単位でも可）  
-  \[
+  $$
   L_{\text{lap}}=\sum_{(i,j)\in E} \|\widehat{\delta u}_i-\widehat{\delta u}_j\|^2
-  \]
+  $$
 - **ドリフト抑制**  
-  \[
+  $$
   L_{\text{drift}}=\Big\|\sum_i \widehat{\delta u}_i\Big\|^2
-  \]
+  $$
 - **総損失（非VAE）**：  
-  \(L=L_{\text{rec}}+\lambda_{\text{lap}}L_{\text{lap}}+\lambda_{\text{drift}}L_{\text{drift}}\)
+  $L=L_{\text{rec}}+\lambda_{\text{lap}}L_{\text{lap}}+\lambda_{\text{drift}}L_{\text{drift}}$
 
 ### 4.2 CVAE 追加
-- **KL**：\(L_{\text{KL}}=\mathrm{KL}(q_\phi(z|\cdot)\,\|\,\mathcal N(0,I))\)  
-- **βウォームアップ**：0→1 を **約10エポック**、最終 \(\beta\in[0.5,1.0]\) を比較  
+- **KL**：$L_{\text{KL}}=\mathrm{KL}(q_\phi(z|\cdot)\,\|\,\mathcal N(0,I))$  
+- **βウォームアップ**：0→1 を **約10エポック**、最終 $\beta\in[0.5,1.0]$ を比較  
 - **総損失（CVAE）**：  
-  \(L=L_{\text{rec}}+\beta L_{\text{KL}}+\lambda_{\text{lap}}L_{\text{lap}}+\lambda_{\text{drift}}L_{\text{drift}}\)
+  $L=L_{\text{rec}}+\beta L_{\text{KL}}+\lambda_{\text{lap}}L_{\text{lap}}+\lambda_{\text{drift}}L_{\text{drift}}$
 
 ### 4.3 オプション
-- **ヘテロスケダスティック**：平均 \(\mu\) と分散 \(\sigma^2\) を出し、**対数尤度**で \(L_{\text{rec}}\) を置換。
-- **2D-ARAP 風**：\(J_i\) の極分解で \(\|J_i-R_i\|_F^2\) を微小係数で追加。
+- **ヘテロスケダスティック**：平均 $\mu$ と分散 $\sigma^2$ を出し、**対数尤度**で $L_{\text{rec}}$ を置換。
+- **2D-ARAP 風**：$J_i$ の極分解で $\|J_i-R_i\|_F^2$ を微小係数で追加。
 - **境界制約**：固定境界（クランプ部等）での変位を0に制約する項。
 - **物理一貫性**：エネルギー保存を近似的に満たす正則化項。
 - **多解像度損失**：粗い〜細かいスケールでの誤差を階層的に評価。
 
-> 初期値：\(\lambda_{\text{lap}}=1\mathrm{e}{-3}\sim5\mathrm{e}{-3}\)、\(\lambda_{\text{drift}}=1\mathrm{e}{-4}\)。
+> 初期値：$\lambda_{\text{lap}}=1\mathrm{e}{-3}\sim5\mathrm{e}{-3}$、$\lambda_{\text{drift}}=1\mathrm{e}{-4}$。
 
 ---
 
 ## 5. 学習プロトコル
 
 - **分割**：60/20/20（形状単位）。形状の複雑度による層別抽出を検討。
-- **最適化**：AdamW(lr=1e-3, wd=1e-4)、batch=形状 1–4/step、epoch=100–300、**早期終了**（val \(L_{\text{rec}}\)）。
+- **最適化**：AdamW(lr=1e-3, wd=1e-4)、batch=形状 1–4/step、epoch=100–300、**早期終了**（val $L_{\text{rec}}$）。
 - **学習率スケジューリング**：CosineAnnealingLR または ReduceLROnPlateau の併用。
 - **正規化**：LayerNorm、Dropout 0.1。勾配クリッピング（max_norm=1.0）追加。
-- **CVAE**：\(d_z=8\sim16\)、βウォームアップ 10 epoch、最終β={0.5,0.7,1.0} 比較。
+- **CVAE**：$d_z=8\sim16$、βウォームアップ 10 epoch、最終β={0.5,0.7,1.0} 比較。
 - **データ拡張**：RIMDの回転不変性を活かした幾何変換（スケール・微小回転）。
-- **ログ**：train/val の \(L_{\text{rec}}\)、KL、**頂点距離（mm）**の median/p90/p95、**Gain** を毎 epoch 記録。
+- **ログ**：train/val の $L_{\text{rec}}$、KL、**頂点距離（mm）**の median/p90/p95、**Gain** を毎 epoch 記録。
 - **チェックポイント**：最良val性能モデルの自動保存とearly stopping patience=20設定。
 
 ---
@@ -152,10 +152,10 @@
 ## 6. 推論フロー
 
 1) 入力特徴を**標準化**（学習時と同じスケーラ）。  
-2) **非VAE**：\(\widehat{\tilde{\delta u}}_{\text{std}}=\text{Model}(c)\)。  
-   **CVAE**：既定は \(z=0\)（平均復元）、必要なら \(z\sim \mathcal N(0,I)\) を複数サンプル。  
-3) **逆標準化**：\(\widehat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)\)。  
-4) **補正**：\(X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\widehat{\delta u}\)。
+2) **非VAE**：$\widehat{\tilde{\delta u}}_{\text{std}}=\text{Model}(c)$。  
+   **CVAE**：既定は $z=0$（平均復元）、必要なら $z\sim \mathcal N(0,I)$ を複数サンプル。  
+3) **逆標準化**：$\widehat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$。  
+4) **補正**：$X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\widehat{\delta u}$。
 
 ---
 
@@ -164,11 +164,11 @@
 - **頂点距離（mm）**：RMSE / MAE と **median/p90/p95**（全体／曲げ線近傍で層別）。
 - **頂点平均誤差**(ユークリッド距離, x座標, y座標)、**頂点最大誤差**(ユークリッド距離, x座標, y座標)、**寸法誤差**(x方向, y方向)
 - **Gain（改善率）**：
-  \[
+  $$
   \text{Gain}=\frac{\|X^{1step}-X^{nv}\|-\|X^{pred}-X^{nv}\|}{\|X^{1step}-X^{nv}\|}\times 100\%
-  \]
-- **ヒートマップ**：\(|X^{pred}-X^{nv}|\) をメッシュ上で可視化（外れ箇所確認）。
-- **CVAEのみ**：複数 \(z\) サンプルの分散マップで**不確実性可視化**。
+  $$
+- **ヒートマップ**：$|X^{pred}-X^{nv}|$ をメッシュ上で可視化（外れ箇所確認）。
+- **CVAEのみ**：複数 $z$ サンプルの分散マップで**不確実性可視化**。
 - **分布比較**：予測値と真値の誤差分布をKSテストで統計的比較。
 - **特徴重要度**：SHAP値やpermutation importanceによる入力特徴の重要度分析。
 - **収束解析**：学習曲線の傾きと飽和点の定量評価。
@@ -178,10 +178,10 @@
 
 ## 8. アブレーション計画
 
-- **損失関数**：MSE vs Huber vs Smooth L1、\(\lambda_{\text{lap}}\in\{1e-3,3e-3,5e-3\}\)。
-- **入力特徴**：\((x,y)\) を入れる／抜く、\(\bar\phi\) の有無、補助幾何の選択。
+- **損失関数**：MSE vs Huber vs Smooth L1、$\lambda_{\text{lap}}\in\{1e-3,3e-3,5e-3\}$。
+- **入力特徴**：$(x,y)$ を入れる／抜く、$\bar\phi$ の有無、補助幾何の選択。
 - **正規化手法**：BatchNorm vs LayerNorm vs GroupNorm、Dropout率の比較。
-- **アーキテクチャ**：非VAE vs CVAE（\(d_z=\{8,16\}\), β={0.5,0.7,1.0}）。
+- **アーキテクチャ**：非VAE vs CVAE（$d_z=\{8,16\}$, β={0.5,0.7,1.0}）。
 - **ネットワーク構造**：MLP vs GNN(GraphSAGE/GCN/GAT 2–3層) vs Transformer。
 - **プーリング戦略**：mean-pool vs max-pool vs attention-pool vs set2set。
 - **活性化関数**：GELU vs ReLU vs Swish vs Mish。
@@ -191,9 +191,9 @@
 
 ## 9. リスクと対策
 
-- **過平滑化**：\(\lambda_{\text{lap}}\) が大きすぎると曲げ線ピークが潰れる → 小さく開始し、val p95 を見ながら微調整。
+- **過平滑化**：$\lambda_{\text{lap}}$ が大きすぎると曲げ線ピークが潰れる → 小さく開始し、val p95 を見ながら微調整。
 - **ドリフト退化**：ラプラシアンのみだと一様平行移動が残る → **ドリフト抑制項**を必ず入れる。
-- **CVAE崩壊**：zを使わない／KLが0に張り付く → βウォームアップ、最終βを下げる、\(d_z\) を小さく、必要なら \(p(z|c)\)。
+- **CVAE崩壊**：zを使わない／KLが0に張り付く → βウォームアップ、最終βを下げる、$d_z$ を小さく、必要なら $p(z|c)$。
 - **標準化リーク**：val/test を含めて fit しない。**train のみ**で fit。
 - **三角化不一致**：四角→三角の規約がケースで変わると壊れる → **固定関数**で一貫実行。
 - **勾配消失・爆発**：勾配クリッピングとスキップ接続、適切な重み初期化（Xavier/He）。
@@ -602,8 +602,8 @@ class ExperimentManager:
 - **正則化**：Dropout 0.1、LayerNorm、勾配クリッピング max_norm=1.0。
 - **最適化**：AdamW(lr=1e-3, wd=1e-4)、β1=0.9, β2=0.999, eps=1e-8。
 - **学習率スケジューリング**：CosineAnnealingLR (T_max=epoch数) または patience=10のReduceLROnPlateau。
-- **CVAE**：\(d_z=8\) or 16、βウォームアップ=10epoch、最終β=0.7。
-- **損失係数**：\(\lambda_{\text{lap}}=3\mathrm{e}{-3}\)、\(\lambda_{\text{drift}}=1\mathrm{e}{-4}\)（小さく始めて調整）。
+- **CVAE**：$d_z=8$ or 16、βウォームアップ=10epoch、最終β=0.7。
+- **損失係数**：$\lambda_{\text{lap}}=3\mathrm{e}{-3}$、$\lambda_{\text{drift}}=1\mathrm{e}{-4}$（小さく始めて調整）。
 - **バッチサイズ**：GPUメモリに応じ1-4、勾配蓄積でeffective batch sizeを調整。
 - **重み初期化**：Xavier uniform (線形層)、ゼロ初期化 (最終出力層)。
 
@@ -671,8 +671,8 @@ for exp_id, config in configs.items():
 - **CVAE崩壊**: β_finalを下げる、latent_dimを小さく
 - **過平滑化**: lambda_lapを小さく
 - **学習率スケジューリング**：CosineAnnealingLR (T_max=epoch数) または patience=10のReduceLROnPlateau。
-- **CVAE**：\(d_z=8\) or 16、βウォームアップ=10epoch、最終β=0.7。
-- **損失係数**：\(\lambda_{\text{lap}}=3\mathrm{e}{-3}\)、\(\lambda_{\text{drift}}=1\mathrm{e}{-4}\)（小さく始めて調整）。
+- **CVAE**：$d_z=8$ or 16、βウォームアップ=10epoch、最終β=0.7。
+- **損失係数**：$\lambda_{\text{lap}}=3\mathrm{e}{-3}$、$\lambda_{\text{drift}}=1\mathrm{e}{-4}$（小さく始めて調整）。
 - **バッチサイズ**：GPUメモリに応じて1-4、勾配蓄積でeffective batch sizeを調整。
 - **重み初期化**：Xavier uniform (線形層)、ゼロ初期化 (最終出力層)。
 
