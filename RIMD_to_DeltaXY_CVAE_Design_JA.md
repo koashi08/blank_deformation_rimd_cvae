@@ -3,7 +3,7 @@
 ## 0. 概要
 
 - **目的**：1step 解析のブランク展開に対し、逐次解析（正解）との**座標誤差** $\delta u_i=(\Delta x_i,\Delta y_i)$ を**直接**予測し、  
-  $X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\widehat{\delta u}$ で補正形状を得る。  
+  $X^{pred}_{2D}=X^{1step}_{2D}+\hat{\delta u}$ で補正形状を得る。  
 - **入力**：1step の **RIMD特徴**（辺の回転差ログ $\phi_{ij}\in\mathbb{R}^3$、頂点の $\log S_i\in\mathbb{R}^6$）＋補助幾何。  
 - **出力**：頂点ごとの 2D 変位 $\delta u$（標準化後の値）。  
 - **前提**：節点対応は一致、座標系は統一（x中心0 / y片端0 / z=0）、規模は **V=1071**、Eは概ね $\approx 2V$。  
@@ -22,7 +22,7 @@
 
 3) **順列不変な条件エンコーダ＋ノード共有デコーダ**  
    - 辺・頂点特徴を小MLPで埋め込み、**mean-pool**でグローバル条件 $h_c$。  
-   - 各頂点は $[\text{node\_feat}_i; h_c]$ から**同一MLP**で $\delta u_i$ を出力 → パラメタ節約。
+   - 各頂点は $[node\_feat_i; h_c]$ から**同一MLP**で $\delta u_i$ を出力 → パラメタ節約。
 
 4) **軽い幾何正則化**  
    - 予測変位場の**ラプラシアン平滑化**と**ドリフト抑制**で非物理なギザギザ／一様平行移動を回避。  
@@ -41,7 +41,7 @@
 - ブランク展開形状→製品形状の対で、各頂点の**変形勾配** $T_i$ を cotan 重み一環最小二乗で推定、**極分解** $T_i=R_iS_i$。  
 - ノード単位の座標値(1step法:step_blk_coord_x/step_prod_coord_x, 逐次解析:nv_blk_coord_x/nv_prod_coord_x 等)、要素単位の構成情報データ(ElementID n1 n2 n3 n4)はそれぞれ.pkl形式で保存済み。
 - **RIMD**：  
-  - 辺：$\phi_{ij}=\log(R_i^\top R_j)\in\mathbb{R}^3$  
+  - 辺：$\phi_{ij}=\log(R_i^T R_j)\in\mathbb{R}^3$
   - 頂点：$\sigma_i=\log S_i\in\mathbb{R}^6$
 
 ### 2.2 ターゲット（座標誤差）
@@ -67,7 +67,7 @@
    - 辺：$[\phi,\text{geo\_edge}]\ \Rightarrow\ (\mu_e,\sigma_e)$  
    - 頂点：$[\sigma,\text{geo\_node}]\ \Rightarrow\ (\mu_v,\sigma_v)$  
    - ターゲット：$\tilde{\delta u}\ \Rightarrow\ (\mu_y,\sigma_y)$  
-3. **逆変換**（推論）：$\widehat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$
+3. **逆変換**（推論）：$\hat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$
 
 > スケーラは 保存（$\mu,\sigma,S$）。辺・頂点・ターゲットで**別々**に管理。
 
@@ -106,15 +106,15 @@
 ### 4.1 基本
 - **再構成（主）**：**Huber**（標準化後のスケールで $\delta=1.0$ 目安）  
   $$
-  L_{\text{rec}}=\sum_i \rho\!\big(\widehat{\tilde{\delta u}}_{i,\text{std}}-\tilde{\delta u}_{i,\text{std}}\big)
+  L_{\text{rec}}=\sum_i \rho\!\big(\hat{\tilde{\delta u}}_{i,\text{std}}-\tilde{\delta u}_{i,\text{std}}\big)
   $$
 - **ラプラシアン平滑化**（逆標準化後の mm 単位でも可）  
   $$
-  L_{\text{lap}}=\sum_{(i,j)\in E} \|\widehat{\delta u}_i-\widehat{\delta u}_j\|^2
+  L_{\text{lap}}=\sum_{(i,j)\in E} \|\hat{\delta u}_i-\hat{\delta u}_j\|^2
   $$
 - **ドリフト抑制**  
   $$
-  L_{\text{drift}}=\Big\|\sum_i \widehat{\delta u}_i\Big\|^2
+  L_{\text{drift}}=\Big\|\sum_i \hat{\delta u}_i\Big\|^2
   $$
 - **総損失（非VAE）**：  
   $L=L_{\text{rec}}+\lambda_{\text{lap}}L_{\text{lap}}+\lambda_{\text{drift}}L_{\text{drift}}$
@@ -152,10 +152,10 @@
 ## 6. 推論フロー
 
 1) 入力特徴を**標準化**（学習時と同じスケーラ）。  
-2) **非VAE**：$\widehat{\tilde{\delta u}}_{\text{std}}=\text{Model}(c)$。  
+2) **非VAE**：$\hat{\tilde{\delta u}}_{\text{std}}=\text{Model}(c)$。  
    **CVAE**：既定は $z=0$（平均復元）、必要なら $z\sim \mathcal N(0,I)$ を複数サンプル。  
-3) **逆標準化**：$\widehat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$。  
-4) **補正**：$X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\widehat{\delta u}$。
+3) **逆標準化**：$\hat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$。  
+4) **補正**：$X^{\text{pred}}_{2D}=X^{\text{1step}}_{2D}+\hat{\delta u}$。
 
 ---
 
