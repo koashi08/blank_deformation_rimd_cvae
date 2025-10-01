@@ -132,7 +132,7 @@
 - **物理一貫性**：エネルギー保存を近似的に満たす正則化項。
 - **多解像度損失**：粗い〜細かいスケールでの誤差を階層的に評価。
 
-> 初期値：$\lambda_{\text{lap}}=1\mathrm{e}{-3}\sim5\mathrm{e}{-3}$、$\lambda_{\text{drift}}=1\mathrm{e}{-4}$。
+> 初期値：$\lambda_{\text{lap}}=0.001 \sim 0.005$、$\lambda_{\text{drift}}=0.0001$。
 
 ---
 
@@ -178,7 +178,7 @@
 
 ## 8. アブレーション計画
 
-- **損失関数**：MSE vs Huber vs Smooth L1、$\lambda_{\text{lap}}\in\{1e-3,3e-3,5e-3\}$。
+- **損失関数**：MSE vs Huber vs Smooth L1、$\lambda_{\text{lap}} \in \{0.001, 0.003, 0.005\}$。
 - **入力特徴**：$(x,y)$ を入れる／抜く、$\bar\phi$ の有無、補助幾何の選択。
 - **正規化手法**：BatchNorm vs LayerNorm vs GroupNorm、Dropout率の比較。
 - **アーキテクチャ**：非VAE vs CVAE（$d_z=\{8,16\}$, β={0.5,0.7,1.0}）。
@@ -603,7 +603,10 @@ class ExperimentManager:
 - **最適化**：AdamW(lr=1e-3, wd=1e-4)、β1=0.9, β2=0.999, eps=1e-8。
 - **学習率スケジューリング**：CosineAnnealingLR (T_max=epoch数) または patience=10のReduceLROnPlateau。
 - **CVAE**：$d_z=8$ or 16、βウォームアップ=10epoch、最終β=0.7。
-- **損失係数**：$\lambda_{\text{lap}}=3\mathrm{e}{-3}$、$\lambda_{\text{drift}}=1\mathrm{e}{-4}$（小さく始めて調整）。
+- **損失係数**：
+  - λ_lap = 3e-3（ラプラシアン平滑化）
+  - λ_drift = 1e-4（ドリフト抑制）
+  - ※小さく始めて調整
 - **バッチサイズ**：GPUメモリに応じ1-4、勾配蓄積でeffective batch sizeを調整。
 - **重み初期化**：Xavier uniform (線形層)、ゼロ初期化 (最終出力層)。
 
@@ -672,7 +675,10 @@ for exp_id, config in configs.items():
 - **過平滑化**: lambda_lapを小さく
 - **学習率スケジューリング**：CosineAnnealingLR (T_max=epoch数) または patience=10のReduceLROnPlateau。
 - **CVAE**：$d_z=8$ or 16、βウォームアップ=10epoch、最終β=0.7。
-- **損失係数**：$\lambda_{\text{lap}}=3\mathrm{e}{-3}$、$\lambda_{\text{drift}}=1\mathrm{e}{-4}$（小さく始めて調整）。
+- **損失係数**：
+  - λ_lap = 3e-3（初期値）
+  - λ_drift = 1e-4（初期値）
+  - ※小さく始めて調整
 - **バッチサイズ**：GPUメモリに応じて1-4、勾配蓄積でeffective batch sizeを調整。
 - **重み初期化**：Xavier uniform (線形層)、ゼロ初期化 (最終出力層)。
 
