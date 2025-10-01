@@ -7,6 +7,8 @@ __pycache__/
 venv/
 .data/
 data/
+/data/
+!src/data/
 outputs/
 checkpoints/
 *.log
