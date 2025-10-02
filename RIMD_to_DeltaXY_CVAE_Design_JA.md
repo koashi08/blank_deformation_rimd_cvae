@@ -36,18 +36,24 @@
 
 ## 2. データ仕様・前処理
 
-### 2.1 三角化と RIMD 算出
+### 2.1 生データ
+- ノード単位のxyz座標値(1step法:step_blk_coord_x/step_prod_coord_x, 逐次解析:nv_blk_coord_x/nv_prod_coord_x 等)はdf_node.pklに保存済み。
+  - NodeIDがcaseごとに1~1071まで与えられている。
+- 要素単位の構成情報データ(ElementID n1 n2 n3 n4)はdf_element.pklに保存済み。
+- 両方ともcaseカラムでケースNoを識別（No001, No002, ...）
+
+### 2.2 三角化と RIMD 算出
 - 四角形メッシュは**一貫規約の対角線**で三角化（全ケース同一規約）。  
 - ブランク展開形状→製品形状の対で、各頂点の**変形勾配** $T_i$ を cotan 重み一環最小二乗で推定、**極分解** $T_i=R_iS_i$。  
-- ノード単位の座標値(1step法:step_blk_coord_x/step_prod_coord_x, 逐次解析:nv_blk_coord_x/nv_prod_coord_x 等)、要素単位の構成情報データ(ElementID n1 n2 n3 n4)はそれぞれ.pkl形式で保存済み。
+
 - **RIMD**：  
   - 辺：$\phi_{ij}=\log(R_i^T R_j)\in\mathbb{R}^3$
   - 頂点：$\sigma_i=\log S_i\in\mathbb{R}^6$
 
-### 2.2 ターゲット（座標誤差）
+### 2.3 ターゲット（座標誤差）
 - $\delta u_i=(x^{nv}_i-x^{1step}_i,\; y^{nv}_i-y^{1step}_i)$
 
-### 2.3 入出力テンソル（ケース No001 の例）
+### 2.4 入出力テンソル（ケース No001 の例）
 ```
  No001/
   rimd_edges_1step.npy   # [E, 3]   φ^1step_ij
@@ -60,7 +66,7 @@
   edge_geometry.npy      # [E, Ge]  辺の幾何特徴
 ```
 
-### 2.4 標準化（データセット基準）
+### 2.5 標準化（データセット基準）
 1. **代表寸法 $S$**：train の 1step 座標から BB 対角長の**中央値**を採用（データセット一定）。  
    $\tilde{\delta u}=\delta u/S$ で粗スケーリング（数値安定・相似性付与）。
 2. **Z標準化**（train で fit、全 split に適用）：  
@@ -161,12 +167,23 @@
 
 ## 7. 評価指標・可視化
 
+- **Baseline-0（基準手法）**：
+  1step解析結果をそのまま使用する手法を「**Baseline-0**」として定義。
+  つまり、予測座標は $X^{Baseline-0} = X^{1step}$（補正なし）。
+
 - **頂点距離（mm）**：RMSE / MAE と **median/p90/p95**（全体／曲げ線近傍で層別）。
 - **頂点平均誤差**(ユークリッド距離, x座標, y座標)、**頂点最大誤差**(ユークリッド距離, x座標, y座標)、**寸法誤差**(x方向, y方向)
 - **Gain（改善率）**：
+  全ての手法の改善率は**Baseline-0からの相対値**として計算：
   $$
-  \text{Gain}=\frac{\|X^{1step}-X^{nv}\|-\|X^{pred}-X^{nv}\|}{\|X^{1step}-X^{nv}\|}\times 100\%
+  \text{Gain}=\frac{\|X^{Baseline-0}-X^{nv}\|-\|X^{pred}-X^{nv}\|}{\|X^{Baseline-0}-X^{nv}\|}\times 100\%
   $$
+  $$
+  =\frac{\|X^{1step}-X^{nv}\|-\|X^{pred}-X^{nv}\|}{\|X^{1step}-X^{nv}\|}\times 100\%
+  $$
+  - **正の値**：予測手法がBaseline-0より優れている（改善）
+  - **負の値**：予測手法がBaseline-0より劣っている（悪化）
+  - **0%**：Baseline-0と同等の性能
 - **ヒートマップ**：$|X^{pred}-X^{nv}|$ をメッシュ上で可視化（外れ箇所確認）。
 - **CVAEのみ**：複数 $z$ サンプルの分散マップで**不確実性可視化**。
 - **分布比較**：予測値と真値の誤差分布をKSテストで統計的比較。
@@ -178,6 +195,11 @@
 
 ## 8. アブレーション計画
 
+### 8.1 基準手法（必須比較対象）
+- **Baseline-0**：1step解析結果をそのまま使用（補正なし）
+  - 全ての実験でBaseline-0との比較を必須とし、Gain計算の基準とする
+
+### 8.2 主要実験項目
 - **損失関数**：MSE vs Huber vs Smooth L1、$\lambda_{\text{lap}} \in \{0.001, 0.003, 0.005\}$。
 - **入力特徴**：$(x,y)$ を入れる／抜く、$\bar\phi$ の有無、補助幾何の選択。
 - **正規化手法**：BatchNorm vs LayerNorm vs GroupNorm、Dropout率の比較。
@@ -185,7 +207,13 @@
 - **ネットワーク構造**：MLP vs GNN(GraphSAGE/GCN/GAT 2–3層) vs Transformer。
 - **プーリング戦略**：mean-pool vs max-pool vs attention-pool vs set2set。
 - **活性化関数**：GELU vs ReLU vs Swish vs Mish。
-- **最適化手法**：Adam vs AdamW vs SGD+momentum、学習率スケジューリング。  
+- **最適化手法**：Adam vs AdamW vs SGD+momentum、学習率スケジューリング。
+
+### 8.3 性能評価基準
+全ての手法をBaseline-0と比較し、以下を評価：
+- **絶対精度**：RMSE, MAE, P95 Error
+- **相対改善**：Baseline-0からのGain（改善率）
+- **統計的有意性**：paired t-test等による有意差検定  
 
 ---
 

@@ -16,14 +16,98 @@ class RIMDPreprocessor:
     def __init__(self, config):
         self.config = config
         self.data_root = Path(config.data_root)
-        self.processed_dir = Path("data/processed")
-        self.splits_dir = Path("data/splits")
+        self.processed_dir = Path("../data/processed")
+        self.splits_dir = Path("../data/splits")
 
         # ディレクトリ作成
         self.processed_dir.mkdir(parents=True, exist_ok=True)
         self.splits_dir.mkdir(parents=True, exist_ok=True)
 
         self.scalers = {}
+
+        # データファイルパス
+        self.df_node_path = self.data_root / "df_node.pkl"
+        self.df_element_path = self.data_root / "df_element.pkl"
+
+    def load_raw_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        生データ（df_node.pkl、df_element.pkl）を読み込み
+
+        Returns:
+            df_node: ノードデータ
+            df_element: 要素データ
+        """
+        logger.info("生データを読み込み中...")
+
+        # ノードデータの読み込み
+        if not self.df_node_path.exists():
+            raise FileNotFoundError(f"Node data file not found: {self.df_node_path}")
+
+        with open(self.df_node_path, 'rb') as f:
+            df_node = pickle.load(f)
+
+        # 要素データの読み込み
+        if not self.df_element_path.exists():
+            raise FileNotFoundError(f"Element data file not found: {self.df_element_path}")
+
+        with open(self.df_element_path, 'rb') as f:
+            df_element = pickle.load(f)
+
+        logger.info(f"ノードデータ形状: {df_node.shape}")
+        logger.info(f"要素データ形状: {df_element.shape}")
+        logger.info(f"ケース数: {df_node['case'].nunique()}")
+
+        return df_node, df_element
+
+    def extract_case_data(self, df_node: pd.DataFrame, df_element: pd.DataFrame,
+                         case_id: str) -> Dict[str, np.ndarray]:
+        """
+        特定ケースのデータを抽出
+
+        Args:
+            df_node: ノードデータ
+            df_element: 要素データ
+            case_id: ケースID（例：'No001'）
+
+        Returns:
+            ケースデータ辞書
+        """
+        # ノードデータの抽出
+        node_mask = df_node['case'] == case_id
+        case_nodes = df_node[node_mask].copy()
+
+        # 要素データの抽出
+        element_mask = df_element['case'] == case_id
+        case_elements = df_element[element_mask].copy()
+
+        if len(case_nodes) == 0:
+            raise ValueError(f"No node data found for case {case_id}")
+        if len(case_elements) == 0:
+            raise ValueError(f"No element data found for case {case_id}")
+
+        # NodeIDでソート（1~1071の順序を保証）
+        case_nodes = case_nodes.sort_values('NodeID').reset_index(drop=True)
+
+        # 座標データの抽出
+        coords_1step_blk = case_nodes[['step_blk_coord_x', 'step_blk_coord_y']].values
+        coords_1step_prod = case_nodes[['step_prod_coord_x', 'step_prod_coord_y']].values
+        coords_nv_blk = case_nodes[['nv_blk_coord_x', 'nv_blk_coord_y']].values
+        coords_nv_prod = case_nodes[['nv_prod_coord_x', 'nv_prod_coord_y']].values
+
+        # 要素データの抽出（四角形要素）
+        quad_elements = case_elements[['n1', 'n2', 'n3', 'n4']].values
+        # NodeIDを0ベースのインデックスに変換
+        quad_elements = quad_elements - 1  # 1~1071 -> 0~1070
+
+        return {
+            'coords_1step_blk': coords_1step_blk,
+            'coords_1step_prod': coords_1step_prod,
+            'coords_nv_blk': coords_nv_blk,
+            'coords_nv_prod': coords_nv_prod,
+            'quad_elements': quad_elements,
+            'node_ids': case_nodes['NodeID'].values,
+            'element_ids': case_elements['ElementID'].values
+        }
 
     def triangulate_quad_mesh(self, quad_elements: np.ndarray) -> np.ndarray:
         """
@@ -74,7 +158,6 @@ class RIMDPreprocessor:
 
             # 簡易変形勾配計算（最小二乗）
             A_list = []
-            b_list = []
 
             for tri in incident_triangles:
                 v_indices = tri
@@ -220,71 +303,25 @@ class RIMDPreprocessor:
             edge_lengths.append(length)
 
         return {
-            'node_geometry': np.column_stack([node_areas, node_angles]),  # [V, 2]
-            'edge_geometry': np.array(edge_lengths).reshape(-1, 1)  # [E, 1]
+            'node_features': np.column_stack([node_areas, node_angles]),  # [V, 2]
+            'edge_features': np.array(edge_lengths).reshape(-1, 1)  # [E, 1]
         }
 
-    def process_single_case(self, case_id: str) -> Dict[str, np.ndarray]:
-        """単一ケースを処理"""
-        logger.info(f"Processing case {case_id}")
-
-        # データ読み込み（仮の実装 - 実際のファイル形式に応じて修正）
-        case_dir = self.data_root / case_id
-
-        # 座標データの読み込み (実装例)
-        coords_1step = np.random.randn(1071, 2)  # 仮データ
-        coords_nv = np.random.randn(1071, 2)     # 仮データ
-
-        # 要素データの読み込み
-        quad_elements = np.random.randint(0, 1071, (500, 4))  # 仮データ
-
-        # 三角分割
-        triangles = self.triangulate_quad_mesh(quad_elements)
-
-        # エッジリスト作成
-        edge_list = self.create_edge_list_from_triangles(triangles)
-
-        # RIMD特徴量計算
-        rimd_features = self.compute_rimd_features(coords_1step, coords_nv, triangles, edge_list)
-
-        # 幾何特徴量計算
-        geom_features_1step = self.compute_geometric_features(coords_1step, triangles, edge_list)
-
-        # 各頂点の近傍φ平均を計算
-        phi_mean = np.zeros((coords_1step.shape[0], 3))
-        for i in range(coords_1step.shape[0]):
-            incident_edges = edge_list[np.any(edge_list == i, axis=1)]
-            if len(incident_edges) > 0:
-                edge_indices = [j for j, (v1, v2) in enumerate(edge_list) if v1 == i or v2 == i]
-                if edge_indices:
-                    phi_mean[i] = rimd_features['edge_features'][edge_indices].mean(axis=0)
-
-        # 結合した特徴量を作成
-        result = {
-            'rimd_edges_1step': rimd_features['edge_features'],
-            'rimd_nodes_1step': rimd_features['node_features'],
-            'edge_index': edge_list.T,  # PyTorch Geometric形式 [2, E]
-            'delta_xy': rimd_features['delta_xy'],
-            'xy_1step': coords_1step,
-            'xy_nv': coords_nv,
-            'geometry_features': geom_features_1step['node_geometry'],
-            'edge_geometry': geom_features_1step['edge_geometry'],
-            'phi_mean': phi_mean
-        }
-
-        return result
 
     def process_all_cases(self, case_ids: Optional[List[str]] = None):
-        """全ケースを処理"""
-        if case_ids is None:
-            # データディレクトリから自動検出（仮実装）
-            case_ids = [f"case_{i:03d}" for i in range(1, 101)]  # 100ケース
+        """全ケースを処理（実データ対応）"""
+        # 生データを読み込み
+        df_node, df_element = self.load_raw_data()
 
-        logger.info(f"Processing {len(case_ids)} cases")
+        if case_ids is None:
+            # 実データから利用可能なケースIDを取得
+            case_ids = sorted(df_node['case'].unique())
+
+        logger.info(f"Processing {len(case_ids)} cases from real data")
 
         for case_id in tqdm(case_ids, desc="Processing cases"):
             try:
-                processed_data = self.process_single_case(case_id)
+                processed_data = self.process_single_case_real(df_node, df_element, case_id)
 
                 # 保存
                 case_path = self.processed_dir / f"{case_id}.pkl"
@@ -293,8 +330,98 @@ class RIMDPreprocessor:
 
             except Exception as e:
                 logger.error(f"Error processing case {case_id}: {e}")
+                continue
 
         logger.info("All cases processed successfully")
+
+    def process_single_case_real(self, df_node: pd.DataFrame, df_element: pd.DataFrame,
+                                case_id: str) -> Dict[str, np.ndarray]:
+        """
+        実データから単一ケースを処理
+
+        Args:
+            df_node: ノードデータ
+            df_element: 要素データ
+            case_id: ケースID
+
+        Returns:
+            処理済みデータ辞書
+        """
+        # ケースデータを抽出
+        case_data = self.extract_case_data(df_node, df_element, case_id)
+
+        # 座標の取得（ブランク→製品の変形を解析）
+        coords_1step = case_data['coords_1step_prod']  # 1step解析の製品座標
+        coords_nv = case_data['coords_nv_prod']        # 逐次解析の製品座標
+        coords_1step_blk = case_data['coords_1step_blk']  # 1step解析のブランク座標（参考用）
+
+        # 四角形要素を三角形に分割
+        triangles = self.triangulate_quad_mesh(case_data['quad_elements'])
+
+        # エッジリスト作成
+        edge_list = self.create_edge_list_from_triangles(triangles)
+
+        # RIMD特徴量計算（ブランク→製品の変形から）
+        rimd_features = self.compute_rimd_features(
+            coords_1step_blk, coords_1step, triangles, edge_list
+        )
+
+        # 補助幾何特徴量計算
+        geom_features_1step = self.compute_geometric_features(coords_1step, triangles, edge_list)
+
+        # phi_mean計算（各頂点の一環辺φの平均）
+        phi_mean = self.compute_phi_mean(rimd_features['edge_features'], edge_list, len(coords_1step))
+
+        # ターゲット（座標誤差）計算
+        delta_xy = coords_nv - coords_1step  # [V, 2]
+
+        # エッジインデックス（PyTorch Geometric形式）
+        edge_index = edge_list.T  # [2, E]
+
+        return {
+            'case_id': case_id,
+            'rimd_edges_1step': rimd_features['edge_features'],  # [E, 3]
+            'rimd_nodes_1step': rimd_features['node_features'],  # [V, 6]
+            'edge_index': edge_index,  # [2, E]
+            'delta_xy': delta_xy,  # [V, 2]
+            'xy_1step': coords_1step,  # [V, 2]
+            'xy_nv': coords_nv,  # [V, 2]
+            'geometry_features': geom_features_1step['node_features'],  # [V, Gn]
+            'edge_geometry': geom_features_1step['edge_features'],  # [E, Ge]
+            'phi_mean': phi_mean,  # [V, 3]
+            'node_ids': case_data['node_ids'],  # [V]
+        }
+
+    def compute_phi_mean(self, edge_features: np.ndarray, edge_list: np.ndarray,
+                        num_nodes: int) -> np.ndarray:
+        """
+        各頂点の一環辺φの平均を計算
+
+        Args:
+            edge_features: [E, 3] エッジのRIMD特徴量（φ）
+            edge_list: [E, 2] エッジリスト
+            num_nodes: ノード数
+
+        Returns:
+            [V, 3] 各頂点のφ平均
+        """
+        phi_sum = np.zeros((num_nodes, 3))
+        phi_count = np.zeros(num_nodes)
+
+        for edge_idx, (i, j) in enumerate(edge_list):
+            phi = edge_features[edge_idx]
+            phi_sum[i] += phi
+            phi_sum[j] += phi
+            phi_count[i] += 1
+            phi_count[j] += 1
+
+        # 平均計算（0除算回避）
+        phi_mean = np.zeros((num_nodes, 3))
+        for i in range(num_nodes):
+            if phi_count[i] > 0:
+                phi_mean[i] = phi_sum[i] / phi_count[i]
+
+        return phi_mean
 
     def create_splits(self):
         """データをtrain/val/testに分割"""

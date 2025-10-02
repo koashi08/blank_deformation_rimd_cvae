@@ -64,33 +64,54 @@ class RIMDMetrics:
     def _denormalize_predictions(self, predictions: torch.Tensor,
                                batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """予測値の標準化を元に戻してmm単位に"""
-        # バッチに含まれるスケーラ情報を使用
-        if hasattr(batch, 'scalers') or 'representative_scale' in batch:
-            # TODO: スケーラ情報を使って逆変換
-            # 仮実装：そのまま返す
-            return predictions
+        # まず標準化スケーラを適用（実装されている場合）
+        if hasattr(self.config, 'scalers') and self.config.scalers.get('target_scaler'):
+            # 標準化を逆変換（実際の実装では適用が必要）
+            denorm_pred = predictions  # TODO: target_scaler.inverse_transform()
         else:
-            # 仮実装：そのまま返す
-            return predictions
+            denorm_pred = predictions
+
+        # 代表寸法スケールを逆変換
+        if 'representative_scale' in batch:
+            denorm_pred = denorm_pred * batch['representative_scale'].unsqueeze(-1)
+
+        return denorm_pred
 
     def _denormalize_targets(self, targets: torch.Tensor,
                            batch: Dict[str, torch.Tensor]) -> torch.Tensor:
         """ターゲットの標準化を元に戻してmm単位に"""
-        # バッチに含まれるスケーラ情報を使用
-        if hasattr(batch, 'scalers') or 'representative_scale' in batch:
-            # TODO: スケーラ情報を使って逆変換
-            # 仮実装：そのまま返す
-            return targets
+        # まず標準化スケーラを適用（実装されている場合）
+        if hasattr(self.config, 'scalers') and self.config.scalers.get('target_scaler'):
+            # 標準化を逆変換（実際の実装では適用が必要）
+            denorm_target = targets  # TODO: target_scaler.inverse_transform()
         else:
-            # 仮実装：そのまま返す
-            return targets
+            denorm_target = targets
+
+        # 代表寸法スケールを逆変換
+        if 'representative_scale' in batch:
+            denorm_target = denorm_target * batch['representative_scale'].unsqueeze(-1)
+
+        return denorm_target
 
     def _compute_gain(self, pred_mm: torch.Tensor, target_mm: torch.Tensor,
                      batch: Dict[str, torch.Tensor]) -> float:
         """
-        Gain（改善率）を計算
+        Gain（改善率）をBaseline-0基準で計算
 
-        Gain = (||X_1step - X_nv|| - ||X_pred - X_nv||) / ||X_1step - X_nv|| * 100%
+        Baseline-0: 1step解析結果をそのまま使用（補正なし）
+        Gain = (||X_Baseline-0 - X_nv|| - ||X_pred - X_nv||) / ||X_Baseline-0 - X_nv|| * 100%
+             = (||X_1step - X_nv|| - ||X_pred - X_nv||) / ||X_1step - X_nv|| * 100%
+
+        Args:
+            pred_mm: 予測変位 [N, 2] (mm単位)
+            target_mm: 真値変位 [N, 2] (mm単位)
+            batch: バッチデータ（座標情報含む）
+
+        Returns:
+            float: Baseline-0からの改善率（%）
+                正の値: 予測手法がBaseline-0より優れている
+                負の値: 予測手法がBaseline-0より劣っている
+                0: Baseline-0と同等
         """
         if 'coords_1step' not in batch or 'coords_nv' not in batch:
             return 0.0
@@ -173,7 +194,12 @@ class RIMDMetrics:
 
     def _compute_gain_numpy(self, predictions: np.ndarray, coords_1step: np.ndarray,
                           coords_nv: np.ndarray) -> float:
-        """NumPy配列でのGain計算"""
+        """
+        NumPy配列でのGain計算（Baseline-0基準）
+
+        Baseline-0: 1step解析結果をそのまま使用
+        Gain = (||X_Baseline-0 - X_nv|| - ||X_pred - X_nv||) / ||X_Baseline-0 - X_nv|| * 100%
+        """
         pred_coords = coords_1step + predictions
         error_1step = np.linalg.norm(coords_1step - coords_nv, axis=1)
         error_pred = np.linalg.norm(pred_coords - coords_nv, axis=1)
@@ -217,7 +243,10 @@ class RIMDMetrics:
         report.append(f"  P90 Error: {metrics['p90_error_mm']:.2f} mm")
         report.append(f"  P95 Error: {metrics['p95_error_mm']:.2f} mm")
         report.append(f"  Max Error: {metrics['max_error_mm']:.2f} mm")
-        report.append(f"  Gain: {metrics['gain_percent']:.1f}%\n")
+        if metrics.get('gain_percent'):
+            report.append(f"  Gain (vs Baseline-0): {metrics['gain_percent']:.1f}%\n")
+        else:
+            report.append("")
 
         # 座標別統計
         report.append("Coordinate-wise Statistics:")

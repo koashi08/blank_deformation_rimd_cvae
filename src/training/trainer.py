@@ -286,6 +286,8 @@ class RIMDTrainer:
         predictions = []
         targets = []
         case_ids = []
+        coords_1step = []
+        coords_nv = []
 
         with torch.no_grad():
             for batch in tqdm(dataloader, desc="Predicting"):
@@ -300,6 +302,12 @@ class RIMDTrainer:
                 if 'case_ids' in batch:
                     case_ids.extend(batch['case_ids'])
 
+                # 評価用座標データも保存
+                if 'coords_1step' in batch:
+                    coords_1step.append(batch['coords_1step'].cpu().numpy())
+                if 'coords_nv' in batch:
+                    coords_nv.append(batch['coords_nv'].cpu().numpy())
+
         result = {
             'predictions': np.vstack(predictions),
             'case_ids': case_ids
@@ -307,6 +315,12 @@ class RIMDTrainer:
 
         if targets:
             result['targets'] = np.vstack(targets)
+
+        if coords_1step:
+            result['coords_1step'] = np.vstack(coords_1step)
+
+        if coords_nv:
+            result['coords_nv'] = np.vstack(coords_nv)
 
         return result
 

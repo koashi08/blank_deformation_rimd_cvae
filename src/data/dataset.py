@@ -121,8 +121,8 @@ class RIMDDataModule:
     def __init__(self, config, scalers: Dict[str, Any]):
         self.config = config
         self.scalers = scalers
-        self.processed_dir = Path("data/processed")
-        self.splits_dir = Path("data/splits")
+        self.processed_dir = Path("../data/processed")
+        self.splits_dir = Path("../data/splits")
 
         # データ分割読み込み
         self._load_splits()

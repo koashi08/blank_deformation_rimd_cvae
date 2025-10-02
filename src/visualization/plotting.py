@@ -242,7 +242,7 @@ class RIMDVisualizer:
         return fig
 
     def plot_model_comparison(self, comparison_results: Dict[str, Dict[str, float]],
-                            title: str = "Model Comparison") -> plt.Figure:
+                            title: str = "Model Comparison (vs Baseline-0)") -> plt.Figure:
         """モデル比較の可視化"""
         models = list(comparison_results.keys())
         metrics = ['rmse_mm', 'mae_mm', 'median_error_mm', 'p95_error_mm']
@@ -430,7 +430,7 @@ class RIMDVisualizer:
         # (実装簡略化のため省略)
 
         fig.update_layout(
-            title_text="RIMD Model Evaluation Dashboard",
+            title_text="RIMD Model Evaluation Dashboard (Gain vs Baseline-0)",
             height=1200
         )
 

@@ -94,10 +94,13 @@ class RIMDEvaluator:
             return {'predictions': pred_array, 'case_ids': case_ids}
 
         # 基本メトリクス
+        coords_1step = predictions.get('coords_1step')
+        coords_nv = predictions.get('coords_nv')
+
         detailed_metrics = self.metrics_calculator.compute_detailed_metrics(
             pred_array, target_array,
-            coords_1step=None,  # TODO: データから取得
-            coords_nv=None,     # TODO: データから取得
+            coords_1step=coords_1step,
+            coords_nv=coords_nv,
             case_ids=case_ids if case_ids else None
         )
 
@@ -360,7 +363,7 @@ class RIMDEvaluator:
             report.append(f"- **Median Error**: {perf['median_error_mm']:.2f} mm")
             report.append(f"- **P95 Error**: {perf['p95_error_mm']:.2f} mm")
             if perf.get('gain_percent'):
-                report.append(f"- **Improvement Gain**: {perf['gain_percent']:.1f}%")
+                report.append(f"- **Improvement Gain (vs Baseline-0)**: {perf['gain_percent']:.1f}%")
             report.append("")
 
         # 主要な発見事項

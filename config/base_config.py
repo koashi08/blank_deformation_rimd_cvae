@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field, asdict
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 import json
 from pathlib import Path
 
@@ -7,7 +7,7 @@ from pathlib import Path
 @dataclass
 class DataConfig:
     """データ関連設定"""
-    data_root: str = "data/processed"
+    data_root: str = "../data/raw_data"  # 実データ（df_node.pkl, df_element.pkl）のディレクトリ
     train_ratio: float = 0.6
     val_ratio: float = 0.2
     test_ratio: float = 0.2
