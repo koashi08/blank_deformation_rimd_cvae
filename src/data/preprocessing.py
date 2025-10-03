@@ -141,6 +141,72 @@ class RIMDPreprocessor:
 
         return np.array(triangles)
 
+    def compute_neighbors_from_triangles(self, triangles: np.ndarray) -> Dict[int, List[int]]:
+        """
+        三角形から隣接情報を計算
+
+        Args:
+            triangles: [T, 3] 三角形要素
+
+        Returns:
+            各頂点の隣接頂点辞書
+        """
+        from collections import defaultdict
+        neighbors = defaultdict(set)
+
+        for face in triangles:
+            for i in range(3):
+                vi = face[i]
+                vj = face[(i + 1) % 3]
+                neighbors[vi].add(vj)
+                neighbors[vj].add(vi)
+
+        return {key: list(value) for key, value in neighbors.items()}
+
+    def compute_cotangent_weights(self, vertices: np.ndarray, triangles: np.ndarray) -> Dict[Tuple[int, int], float]:
+        """
+        コタンジェント重みを計算
+
+        Args:
+            vertices: [V, 3] 頂点座標
+            triangles: [T, 3] 三角形要素
+
+        Returns:
+            各エッジのコタンジェント重み
+        """
+        edge_weights = {}
+
+        for face in triangles:
+            i, j, k = face
+            vi, vj, vk = vertices[i], vertices[j], vertices[k]
+
+            # 各辺のベクトル
+            e_ij = vj - vi
+            e_jk = vk - vj
+            e_ki = vi - vk
+
+            def cotangent(v1, v2):
+                cos_theta = np.dot(v1, v2)
+                sin_theta = np.linalg.norm(np.cross(v1, v2))
+                return cos_theta / sin_theta if sin_theta > 1e-8 else 0.0
+
+            # 各エッジの対角のコタンジェント値
+            cot_alpha = cotangent(e_ki, -e_jk)  # 辺(i,j)の対角
+            cot_beta = cotangent(e_ij, -e_ki)   # 辺(j,k)の対角
+            cot_gamma = cotangent(e_jk, -e_ij)  # 辺(k,i)の対角
+
+            def add_edge_weight(edge_weights, i, j, weight):
+                edge = tuple(sorted((i, j)))
+                if edge not in edge_weights:
+                    edge_weights[edge] = 0.0
+                edge_weights[edge] += weight
+
+            add_edge_weight(edge_weights, i, j, cot_alpha)
+            add_edge_weight(edge_weights, j, k, cot_beta)
+            add_edge_weight(edge_weights, k, i, cot_gamma)
+
+        return edge_weights
+
     def compute_deformation_gradient_3d_to_2d(self, coords_from_3d: np.ndarray, coords_to_2d: np.ndarray,
                                             triangles: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -155,89 +221,154 @@ class RIMDPreprocessor:
             R: [V, 3, 3] 回転行列
             S: [V, 3, 3] ストレッチ行列
         """
-        V = coords_from_3d.shape[0]
-        R = np.zeros((V, 3, 3))
-        S = np.zeros((V, 3, 3))
-
         # 2D座標を3D座標に拡張（z=0）
-        coords_to_3d = np.column_stack([coords_to_2d, np.zeros(V)])
+        coords_to_3d = np.column_stack([coords_to_2d, np.zeros(coords_from_3d.shape[0])])
 
-        # cotan重み計算（簡易版）
-        for i in range(V):
-            # 頂点iを含む三角形を探す
-            incident_triangles = triangles[np.any(triangles == i, axis=1)]
+        # 隣接情報とコタンジェント重みを計算
+        neighbors = self.compute_neighbors_from_triangles(triangles)
+        cotangent_weights = self.compute_cotangent_weights(coords_from_3d, triangles)
 
-            if len(incident_triangles) == 0:
-                # デフォルト値
-                R[i] = np.eye(3)
-                S[i] = np.eye(3)
-                continue
+        # 変形勾配計算
+        deformation_gradients = self._compute_deformation_gradients(
+            coords_from_3d, coords_to_3d, neighbors, cotangent_weights
+        )
 
-            # 変形勾配テンソル計算（3D→3D、ただし最終的にz=0）
-            F_matrices = []
-
-            for tri in incident_triangles:
-                v_indices = tri
-                if i not in v_indices:
-                    continue
-
-                # 三角形の3D座標
-                p_from_3d = coords_from_3d[v_indices]  # [3, 3]
-                p_to_3d = coords_to_3d[v_indices]      # [3, 3]
-
-                # 頂点iを原点とするローカル座標系
-                i_local = np.where(v_indices == i)[0][0]
-                origin_from = p_from_3d[i_local]
-                origin_to = p_to_3d[i_local]
-
-                # 他の2頂点への相対座標
-                edges_from = p_from_3d - origin_from  # [3, 3]
-                edges_to = p_to_3d - origin_to        # [3, 3]
-
-                # 非零エッジのみ使用
-                valid_edges = []
-                for j in range(3):
-                    if j != i_local and np.linalg.norm(edges_from[j]) > 1e-8:
-                        valid_edges.append(j)
-
-                if len(valid_edges) >= 2:
-                    # 最小二乗で変形勾配を推定
-                    A = edges_from[valid_edges].T  # [3, n_edges]
-                    B = edges_to[valid_edges].T    # [3, n_edges]
-
-                    # F @ A = B  =>  F = B @ A^+
-                    try:
-                        F_local = B @ np.linalg.pinv(A)
-                        F_matrices.append(F_local)
-                    except np.linalg.LinAlgError:
-                        continue
-
-            if len(F_matrices) == 0:
-                R[i] = np.eye(3)
-                S[i] = np.eye(3)
-            else:
-                # 平均化
-                F = np.mean(F_matrices, axis=0)  # [3, 3]
-
-                # 極分解: F = RS
-                try:
-                    U, sigma, Vt = np.linalg.svd(F)
-                    R[i] = U @ Vt
-
-                    # 回転の検出値を修正（det(R) = 1を保証）
-                    if np.linalg.det(R[i]) < 0:
-                        U[:, -1] *= -1
-                        R[i] = U @ Vt
-
-                    S[i] = Vt.T @ np.diag(sigma) @ Vt
-                except np.linalg.LinAlgError:
-                    R[i] = np.eye(3)
-                    S[i] = np.eye(3)
+        # 極分解
+        R, S = self._decompose_deformation_gradients(deformation_gradients)
 
         return R, S
 
+    def _compute_deformation_gradients(self, vertices_ref: np.ndarray, vertices_def: np.ndarray,
+                                     neighbors: Dict[int, List[int]],
+                                     cotangent_weights: Dict[Tuple[int, int], float]) -> np.ndarray:
+        """
+        コタンジェント重みを使った変形勾配計算
+        """
+        num_vertices = vertices_ref.shape[0]
+        deformation_gradients = np.zeros((num_vertices, 3, 3))
+
+        for i in range(num_vertices):
+            if i not in neighbors:
+                deformation_gradients[i] = np.eye(3)
+                continue
+
+            Ni = neighbors[i]
+
+            # 最小二乗法で変形勾配を計算
+            M = np.zeros((3, 3))
+            N_mat = np.zeros((3, 3))
+
+            for j in Ni:
+                weight = cotangent_weights.get(tuple(sorted((i, j))), 1.0)
+                E = vertices_ref[i] - vertices_ref[j]
+                E_def = vertices_def[i] - vertices_def[j]
+                M += weight * np.outer(E, E)
+                N_mat += weight * np.outer(E_def, E)
+
+            # M が特異の場合は疑似逆行列を使用
+            if np.linalg.cond(M) < 1e12:
+                T_i = N_mat @ np.linalg.inv(M)
+            else:
+                T_i = N_mat @ np.linalg.pinv(M)
+
+            deformation_gradients[i] = T_i
+
+        return deformation_gradients
+
+    def _decompose_deformation_gradients(self, deformation_gradients: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        変形勾配を回転部分とスケール/シアー部分に分解
+        """
+        num_vertices = len(deformation_gradients)
+        rotations = np.zeros((num_vertices, 3, 3))
+        scalings_shears = np.zeros((num_vertices, 3, 3))
+
+        for i in range(num_vertices):
+            T = deformation_gradients[i]
+
+            # 特異値分解 (SVD)
+            U, Sigma, Vt = np.linalg.svd(T)
+
+            # 回転行列 R
+            R = U @ Vt
+            if np.linalg.det(R) < 0:  # 反転が生じた場合の修正
+                Vt[2, :] *= -1
+                R = U @ Vt
+
+            # スケール/シアー行列 S
+            S = Vt.T @ np.diag(Sigma) @ Vt
+
+            rotations[i] = R
+            scalings_shears[i] = S
+
+        return rotations, scalings_shears
+
+    def _compute_rotation_differences_features(self, rotations: np.ndarray,
+                                             neighbors: Dict[int, List[int]]) -> List[np.ndarray]:
+        """
+        隣接頂点間の回転差の対数を計算
+        """
+        from scipy.linalg import logm
+        edge_features = []
+
+        for i, Ri in enumerate(rotations):
+            if i not in neighbors:
+                continue
+
+            for j in neighbors[i]:
+                if i < j:  # エッジ (i, j) の片方向のみ計算
+                    Rj = rotations[j]
+                    dRij = Ri.T @ Rj  # 回転差 dR_ij = R_i^T * R_j
+
+                    try:
+                        log_dRij = logm(dRij)  # 行列対数を計算
+                        # 軸角表現に変換（反対称行列の成分を抽出）
+                        phi = np.array([log_dRij[2,1], log_dRij[0,2], log_dRij[1,0]])
+                        edge_features.append(phi)
+                    except Exception:
+                        # フォールバック：軸角表現で直接計算
+                        theta = np.arccos(np.clip((np.trace(dRij) - 1) / 2, -1, 1))
+                        if np.abs(theta) < 1e-6:
+                            phi = np.zeros(3)
+                        else:
+                            axis = np.array([dRij[2,1] - dRij[1,2],
+                                           dRij[0,2] - dRij[2,0],
+                                           dRij[1,0] - dRij[0,1]]) / (2 * np.sin(theta))
+                            phi = theta * axis
+                        edge_features.append(phi)
+
+        return edge_features
+
+    def _compute_scaling_shear_features(self, scalings_shears: np.ndarray) -> List[np.ndarray]:
+        """
+        スケール/シアー行列の対数を計算
+        """
+        from scipy.linalg import logm
+        node_features = []
+
+        for i in range(len(scalings_shears)):
+            S = scalings_shears[i]
+
+            try:
+                # 対称行列の対数を直接計算
+                log_S = logm(S)
+                # 3x3対称行列を6次元ベクトルに（上三角）
+                sigma = np.array([log_S[0,0], log_S[1,1], log_S[2,2],
+                                log_S[0,1], log_S[0,2], log_S[1,2]])
+            except Exception:
+                # フォールバック：固有値分解を使用
+                eigenvals, eigenvecs = np.linalg.eigh(S)
+                eigenvals = np.maximum(eigenvals, 1e-8)  # 数値安定性
+                log_S = eigenvecs @ np.diag(np.log(eigenvals)) @ eigenvecs.T
+                sigma = np.array([log_S[0,0], log_S[1,1], log_S[2,2],
+                                log_S[0,1], log_S[0,2], log_S[1,2]])
+
+            node_features.append(sigma)
+
+        return node_features
+
     def compute_rimd_features_3d_to_2d(self, coords_prod_3d: np.ndarray, coords_blk_2d: np.ndarray,
-                                     triangles: np.ndarray, edge_list: np.ndarray) -> Dict[str, np.ndarray]:
+                                     triangles: np.ndarray, edge_list: np.ndarray = None) -> Dict[str, np.ndarray]:
         """
         3D→2D変形のRIMD特徴量を計算
 
@@ -253,43 +384,30 @@ class RIMDPreprocessor:
         # 3D→2D変形勾配の極分解
         R, S = self.compute_deformation_gradient_3d_to_2d(coords_prod_3d, coords_blk_2d, triangles)
 
-        # エッジのRIMD特徴 (φ_ij = log(R_i^T @ R_j)) - 3D版
-        edge_features = []
-        for i, j in edge_list:
-            R_diff = R[i].T @ R[j]  # [3, 3]
+        # 隣接情報を再計算（RIMD特徴量計算用）
+        neighbors = self.compute_neighbors_from_triangles(triangles)
 
-            # 3D回転行列のlogを軸角表現で計算
-            theta = np.arccos(np.clip((np.trace(R_diff) - 1) / 2, -1, 1))
-            if np.abs(theta) < 1e-6:
-                phi = np.zeros(3)
-            else:
-                # 軸角表現の軸を計算
-                axis = np.array([R_diff[2,1] - R_diff[1,2],
-                               R_diff[0,2] - R_diff[2,0],
-                               R_diff[1,0] - R_diff[0,1]]) / (2 * np.sin(theta))
-                phi = theta * axis
+        # RIMD特徴量計算（サンプルコードのcompute_RIMD_featureを参考）
+        edge_features = self._compute_rotation_differences_features(R, neighbors)
+        node_features = self._compute_scaling_shear_features(S)
 
-            edge_features.append(phi)
+        # エッジリストを隣接情報から再構築（順序保証）
+        edge_list_from_neighbors = []
+        for i in range(len(R)):
+            if i not in neighbors:
+                continue
+            for j in neighbors[i]:
+                if i < j:  # 片方向のみ
+                    edge_list_from_neighbors.append([i, j])
 
-        # ノードのRIMD特徴 (σ_i = log(S_i)) - 3D版
-        node_features = []
-        for i in range(len(S)):
-            # 3x3対称行列のlog
-            eigenvals, eigenvecs = np.linalg.eigh(S[i])
-            eigenvals = np.maximum(eigenvals, 1e-8)  # 数値安定性
-            log_S = eigenvecs @ np.diag(np.log(eigenvals)) @ eigenvecs.T
-
-            # 3x3対称行列を6次元ベクトルに（上三角）
-            sigma = np.array([log_S[0,0], log_S[1,1], log_S[2,2],
-                            log_S[0,1], log_S[0,2], log_S[1,2]])
-            node_features.append(sigma)
+        edge_list_from_neighbors = np.array(edge_list_from_neighbors)
 
         return {
             'edge_features': np.array(edge_features),  # [E, 3]
             'node_features': np.array(node_features),  # [V, 6]
             'coords_prod_3d': coords_prod_3d,          # [V, 3]
             'coords_blk_2d': coords_blk_2d,            # [V, 2]
-            'edge_list': edge_list,                    # [E, 2]
+            'edge_list': edge_list_from_neighbors,     # [E, 2]
         }
 
     def create_edge_list_from_triangles(self, triangles: np.ndarray) -> np.ndarray:
@@ -406,17 +524,20 @@ class RIMDPreprocessor:
             coords_1step_prod_3d, coords_1step_blk_2d, triangles, edge_list
         )
 
-        # 補助幾何特徴量計算（展開形状ベース）
-        geom_features_1step = self.compute_geometric_features(coords_1step_blk_2d, triangles, edge_list)
+        # RIMD計算で生成されたエッジリストを使用
+        edge_list_rimd = rimd_features['edge_list']
+
+        # # 補助幾何特徴量計算（展開形状ベース）
+        # geom_features_1step = self.compute_geometric_features(coords_1step_blk_2d, triangles, edge_list_rimd)
 
         # phi_mean計算（各頂点の一環辺φの平均）
-        phi_mean = self.compute_phi_mean(rimd_features['edge_features'], edge_list, len(coords_1step_blk_2d))
+        phi_mean = self.compute_phi_mean(rimd_features['edge_features'], edge_list_rimd, len(coords_1step_blk_2d))
 
         # ターゲット（展開形状での座標誤差）計算
         delta_xy = coords_nv_blk_2d - coords_1step_blk_2d  # [V, 2]
 
         # エッジインデックス（PyTorch Geometric形式）
-        edge_index = edge_list.T  # [2, E]
+        edge_index = edge_list_rimd.T  # [2, E]
 
         return {
             'case_id': case_id,
@@ -426,8 +547,8 @@ class RIMDPreprocessor:
             'delta_xy': delta_xy,  # [V, 2] - 展開形状での座標誤差
             'xy_1step': coords_1step_blk_2d,  # [V, 2] - 展開1step座標
             'xy_nv': coords_nv_blk_2d,  # [V, 2] - 展開逐次解析座標
-            'geometry_features': geom_features_1step['node_features'],  # [V, Gn]
-            'edge_geometry': geom_features_1step['edge_features'],  # [E, Ge]
+            # 'geometry_features': geom_features_1step['node_features'],  # [V, Gn]
+            # 'edge_geometry': geom_features_1step['edge_features'],  # [E, Ge]
             'phi_mean': phi_mean,  # [V, 3]
             'node_ids': case_data['node_ids'],  # [V]
         }
