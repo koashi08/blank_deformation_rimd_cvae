@@ -89,10 +89,24 @@ class RIMDPreprocessor:
         case_nodes = case_nodes.sort_values('NodeID').reset_index(drop=True)
 
         # 座標データの抽出
+        # 展開形状（2D）
+        required_blk_cols = ['step_blk_coord_x', 'step_blk_coord_y', 'nv_blk_coord_x', 'nv_blk_coord_y']
+        missing_blk_cols = [col for col in required_blk_cols if col not in case_nodes.columns]
+        if missing_blk_cols:
+            raise ValueError(f"Missing blank coordinate columns for case {case_id}: {missing_blk_cols}")
+
         coords_1step_blk = case_nodes[['step_blk_coord_x', 'step_blk_coord_y']].values
-        coords_1step_prod = case_nodes[['step_prod_coord_x', 'step_prod_coord_y']].values
         coords_nv_blk = case_nodes[['nv_blk_coord_x', 'nv_blk_coord_y']].values
-        coords_nv_prod = case_nodes[['nv_prod_coord_x', 'nv_prod_coord_y']].values
+
+        # 製品形状（3D）
+        required_prod_cols = ['step_prod_coord_x', 'step_prod_coord_y', 'step_prod_coord_z',
+                             'nv_prod_coord_x', 'nv_prod_coord_y', 'nv_prod_coord_z']
+        missing_prod_cols = [col for col in required_prod_cols if col not in case_nodes.columns]
+        if missing_prod_cols:
+            raise ValueError(f"Missing product coordinate columns for case {case_id}: {missing_prod_cols}")
+
+        coords_1step_prod = case_nodes[['step_prod_coord_x', 'step_prod_coord_y', 'step_prod_coord_z']].values
+        coords_nv_prod = case_nodes[['nv_prod_coord_x', 'nv_prod_coord_y', 'nv_prod_coord_z']].values
 
         # 要素データの抽出（四角形要素）
         quad_elements = case_elements[['n1', 'n2', 'n3', 'n4']].values
@@ -127,23 +141,26 @@ class RIMDPreprocessor:
 
         return np.array(triangles)
 
-    def compute_deformation_gradient(self, coords_from: np.ndarray, coords_to: np.ndarray,
-                                   triangles: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def compute_deformation_gradient_3d_to_2d(self, coords_from_3d: np.ndarray, coords_to_2d: np.ndarray,
+                                            triangles: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
-        変形勾配テンソルを計算し、極分解でR, Sを取得
+        3D→2D変形勾配テンソルを計算し、極分解でR, Sを取得
 
         Args:
-            coords_from: [V, 2] 変形前座標
-            coords_to: [V, 2] 変形後座標
+            coords_from_3d: [V, 3] 変形前3D座標（製品形状）
+            coords_to_2d: [V, 2] 変形後2D座標（展開形状）
             triangles: [T, 3] 三角形要素
 
         Returns:
-            R: [V, 2, 2] 回転行列
-            S: [V, 2, 2] ストレッチ行列
+            R: [V, 3, 3] 回転行列
+            S: [V, 3, 3] ストレッチ行列
         """
-        V = coords_from.shape[0]
-        R = np.zeros((V, 2, 2))
-        S = np.zeros((V, 2, 2))
+        V = coords_from_3d.shape[0]
+        R = np.zeros((V, 3, 3))
+        S = np.zeros((V, 3, 3))
+
+        # 2D座標を3D座標に拡張（z=0）
+        coords_to_3d = np.column_stack([coords_to_2d, np.zeros(V)])
 
         # cotan重み計算（簡易版）
         for i in range(V):
@@ -152,104 +169,127 @@ class RIMDPreprocessor:
 
             if len(incident_triangles) == 0:
                 # デフォルト値
-                R[i] = np.eye(2)
-                S[i] = np.eye(2)
+                R[i] = np.eye(3)
+                S[i] = np.eye(3)
                 continue
 
-            # 簡易変形勾配計算（最小二乗）
-            A_list = []
+            # 変形勾配テンソル計算（3D→3D、ただし最終的にz=0）
+            F_matrices = []
 
             for tri in incident_triangles:
                 v_indices = tri
                 if i not in v_indices:
                     continue
 
-                # ローカル座標系での計算
-                p_from = coords_from[v_indices]
-                p_to = coords_to[v_indices]
+                # 三角形の3D座標
+                p_from_3d = coords_from_3d[v_indices]  # [3, 3]
+                p_to_3d = coords_to_3d[v_indices]      # [3, 3]
 
-                # 重心を原点とする
-                centroid_from = p_from.mean(axis=0)
-                centroid_to = p_to.mean(axis=0)
+                # 頂点iを原点とするローカル座標系
+                i_local = np.where(v_indices == i)[0][0]
+                origin_from = p_from_3d[i_local]
+                origin_to = p_to_3d[i_local]
 
-                p_from_centered = p_from - centroid_from
-                p_to_centered = p_to - centroid_to
+                # 他の2頂点への相対座標
+                edges_from = p_from_3d - origin_from  # [3, 3]
+                edges_to = p_to_3d - origin_to        # [3, 3]
 
-                # 簡易変形勾配（重心からの相対座標の比）
-                if np.linalg.norm(p_from_centered) > 1e-8:
-                    F_local = np.outer(p_to_centered.flatten(), p_from_centered.flatten()) / np.linalg.norm(p_from_centered)**2
-                    A_list.append(F_local)
+                # 非零エッジのみ使用
+                valid_edges = []
+                for j in range(3):
+                    if j != i_local and np.linalg.norm(edges_from[j]) > 1e-8:
+                        valid_edges.append(j)
 
-            if len(A_list) == 0:
-                R[i] = np.eye(2)
-                S[i] = np.eye(2)
+                if len(valid_edges) >= 2:
+                    # 最小二乗で変形勾配を推定
+                    A = edges_from[valid_edges].T  # [3, n_edges]
+                    B = edges_to[valid_edges].T    # [3, n_edges]
+
+                    # F @ A = B  =>  F = B @ A^+
+                    try:
+                        F_local = B @ np.linalg.pinv(A)
+                        F_matrices.append(F_local)
+                    except np.linalg.LinAlgError:
+                        continue
+
+            if len(F_matrices) == 0:
+                R[i] = np.eye(3)
+                S[i] = np.eye(3)
             else:
                 # 平均化
-                F = np.mean(A_list, axis=0).reshape(2, 2)
+                F = np.mean(F_matrices, axis=0)  # [3, 3]
 
                 # 極分解: F = RS
-                U, sigma, Vt = np.linalg.svd(F)
-                R[i] = U @ Vt
-                S[i] = Vt.T @ np.diag(sigma) @ Vt
+                try:
+                    U, sigma, Vt = np.linalg.svd(F)
+                    R[i] = U @ Vt
+
+                    # 回転の検出値を修正（det(R) = 1を保証）
+                    if np.linalg.det(R[i]) < 0:
+                        U[:, -1] *= -1
+                        R[i] = U @ Vt
+
+                    S[i] = Vt.T @ np.diag(sigma) @ Vt
+                except np.linalg.LinAlgError:
+                    R[i] = np.eye(3)
+                    S[i] = np.eye(3)
 
         return R, S
 
-    def compute_rimd_features(self, coords_1step: np.ndarray, coords_nv: np.ndarray,
-                            triangles: np.ndarray, edge_list: np.ndarray) -> Dict[str, np.ndarray]:
+    def compute_rimd_features_3d_to_2d(self, coords_prod_3d: np.ndarray, coords_blk_2d: np.ndarray,
+                                     triangles: np.ndarray, edge_list: np.ndarray) -> Dict[str, np.ndarray]:
         """
-        RIMD特徴量を計算
+        3D→2D変形のRIMD特徴量を計算
 
         Args:
-            coords_1step: [V, 2] 1step座標
-            coords_nv: [V, 2] 逐次解析座標
+            coords_prod_3d: [V, 3] 製品3D座標
+            coords_blk_2d: [V, 2] 展開2D座標
             triangles: [T, 3] 三角形要素
             edge_list: [E, 2] エッジリスト
 
         Returns:
             RIMD特徴量辞書
         """
-        # 変形勾配の極分解
-        R, S = self.compute_deformation_gradient(coords_1step, coords_nv, triangles)
+        # 3D→2D変形勾配の極分解
+        R, S = self.compute_deformation_gradient_3d_to_2d(coords_prod_3d, coords_blk_2d, triangles)
 
-        # エッジのRIMD特徴 (φ_ij = log(R_i^T @ R_j))
+        # エッジのRIMD特徴 (φ_ij = log(R_i^T @ R_j)) - 3D版
         edge_features = []
         for i, j in edge_list:
-            R_diff = R[i].T @ R[j]
-            # 回転行列のlog（簡易版：Rodrigues公式）
+            R_diff = R[i].T @ R[j]  # [3, 3]
+
+            # 3D回転行列のlogを軸角表現で計算
             theta = np.arccos(np.clip((np.trace(R_diff) - 1) / 2, -1, 1))
             if np.abs(theta) < 1e-6:
                 phi = np.zeros(3)
             else:
+                # 軸角表現の軸を計算
                 axis = np.array([R_diff[2,1] - R_diff[1,2],
                                R_diff[0,2] - R_diff[2,0],
                                R_diff[1,0] - R_diff[0,1]]) / (2 * np.sin(theta))
-                # 2Dの場合、z軸周りの回転のみ
-                phi = np.array([0, 0, theta * axis[2]]) if len(axis) > 2 else np.array([0, 0, theta])
+                phi = theta * axis
 
             edge_features.append(phi)
 
-        # ノードのRIMD特徴 (σ_i = log(S_i))
+        # ノードのRIMD特徴 (σ_i = log(S_i)) - 3D版
         node_features = []
         for i in range(len(S)):
-            # 対称行列のlog
+            # 3x3対称行列のlog
             eigenvals, eigenvecs = np.linalg.eigh(S[i])
             eigenvals = np.maximum(eigenvals, 1e-8)  # 数値安定性
             log_S = eigenvecs @ np.diag(np.log(eigenvals)) @ eigenvecs.T
 
-            # 2x2対称行列を6次元ベクトルに（上三角）
-            sigma = np.array([log_S[0,0], log_S[1,1], log_S[0,1], 0, 0, 0])
+            # 3x3対称行列を6次元ベクトルに（上三角）
+            sigma = np.array([log_S[0,0], log_S[1,1], log_S[2,2],
+                            log_S[0,1], log_S[0,2], log_S[1,2]])
             node_features.append(sigma)
-
-        # 座標誤差（ターゲット）
-        delta_xy = coords_nv - coords_1step
 
         return {
             'edge_features': np.array(edge_features),  # [E, 3]
             'node_features': np.array(node_features),  # [V, 6]
-            'delta_xy': delta_xy,  # [V, 2]
-            'coords_1step': coords_1step,  # [V, 2]
-            'coords_nv': coords_nv,  # [V, 2]
-            'edge_list': edge_list,  # [E, 2]
+            'coords_prod_3d': coords_prod_3d,          # [V, 3]
+            'coords_blk_2d': coords_blk_2d,            # [V, 2]
+            'edge_list': edge_list,                    # [E, 2]
         }
 
     def create_edge_list_from_triangles(self, triangles: np.ndarray) -> np.ndarray:
@@ -350,10 +390,10 @@ class RIMDPreprocessor:
         # ケースデータを抽出
         case_data = self.extract_case_data(df_node, df_element, case_id)
 
-        # 座標の取得（ブランク→製品の変形を解析）
-        coords_1step = case_data['coords_1step_prod']  # 1step解析の製品座標
-        coords_nv = case_data['coords_nv_prod']        # 逐次解析の製品座標
-        coords_1step_blk = case_data['coords_1step_blk']  # 1step解析のブランク座標（参考用）
+        # 座標の取得（製品→展開の変形を解析）
+        coords_1step_prod_3d = case_data['coords_1step_prod']  # 1step解析の製品座標（3D）
+        coords_1step_blk_2d = case_data['coords_1step_blk']    # 1step解析の展開座標（2D）
+        coords_nv_blk_2d = case_data['coords_nv_blk']          # 逐次解析の展開座標（2D）
 
         # 四角形要素を三角形に分割
         triangles = self.triangulate_quad_mesh(case_data['quad_elements'])
@@ -361,31 +401,31 @@ class RIMDPreprocessor:
         # エッジリスト作成
         edge_list = self.create_edge_list_from_triangles(triangles)
 
-        # RIMD特徴量計算（ブランク→製品の変形から）
-        rimd_features = self.compute_rimd_features(
-            coords_1step_blk, coords_1step, triangles, edge_list
+        # RIMD特徴量計算（製品3D→展開2Dの変形から）
+        rimd_features = self.compute_rimd_features_3d_to_2d(
+            coords_1step_prod_3d, coords_1step_blk_2d, triangles, edge_list
         )
 
-        # 補助幾何特徴量計算
-        geom_features_1step = self.compute_geometric_features(coords_1step, triangles, edge_list)
+        # 補助幾何特徴量計算（展開形状ベース）
+        geom_features_1step = self.compute_geometric_features(coords_1step_blk_2d, triangles, edge_list)
 
         # phi_mean計算（各頂点の一環辺φの平均）
-        phi_mean = self.compute_phi_mean(rimd_features['edge_features'], edge_list, len(coords_1step))
+        phi_mean = self.compute_phi_mean(rimd_features['edge_features'], edge_list, len(coords_1step_blk_2d))
 
-        # ターゲット（座標誤差）計算
-        delta_xy = coords_nv - coords_1step  # [V, 2]
+        # ターゲット（展開形状での座標誤差）計算
+        delta_xy = coords_nv_blk_2d - coords_1step_blk_2d  # [V, 2]
 
         # エッジインデックス（PyTorch Geometric形式）
         edge_index = edge_list.T  # [2, E]
 
         return {
             'case_id': case_id,
-            'rimd_edges_1step': rimd_features['edge_features'],  # [E, 3]
-            'rimd_nodes_1step': rimd_features['node_features'],  # [V, 6]
+            'rimd_edges_1step': rimd_features['edge_features'],  # [E, 3] - 製品→展開のRIMD
+            'rimd_nodes_1step': rimd_features['node_features'],  # [V, 6] - 製品→展開のRIMD
             'edge_index': edge_index,  # [2, E]
-            'delta_xy': delta_xy,  # [V, 2]
-            'xy_1step': coords_1step,  # [V, 2]
-            'xy_nv': coords_nv,  # [V, 2]
+            'delta_xy': delta_xy,  # [V, 2] - 展開形状での座標誤差
+            'xy_1step': coords_1step_blk_2d,  # [V, 2] - 展開1step座標
+            'xy_nv': coords_nv_blk_2d,  # [V, 2] - 展開逐次解析座標
             'geometry_features': geom_features_1step['node_features'],  # [V, Gn]
             'edge_geometry': geom_features_1step['edge_features'],  # [E, Ge]
             'phi_mean': phi_mean,  # [V, 3]

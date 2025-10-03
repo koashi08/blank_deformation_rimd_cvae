@@ -2,11 +2,11 @@
 
 ## 0. 概要
 
-- **目的**：1step 解析のブランク展開に対し、逐次解析（正解）との**座標誤差** $\delta u_i=(\Delta x_i,\Delta y_i)$ を**直接**予測し、  
-  $X^{pred}_{2D}=X^{1step}_{2D}+\hat{\delta u}$ で補正形状を得る。  
-- **入力**：1step の **RIMD特徴**（辺の回転差ログ $\phi_{ij}\in\mathbb{R}^3$、頂点の $\log S_i\in\mathbb{R}^6$）＋補助幾何。  
-- **出力**：頂点ごとの 2D 変位 $\delta u$（標準化後の値）。  
-- **前提**：節点対応は一致、座標系は統一（x中心0 / y片端0 / z=0）、規模は **V=1071**、Eは概ね $\approx 2V$。  
+- **目的**：製品1step形状（3D）から展開1step形状（2D）への変形から抽出したRIMD特徴量を用いて、展開形状における1step解析と逐次解析の**座標誤差** $\delta u_i=(\Delta x_i,\Delta y_i)$ を**直接**予測し、
+  $X^{pred}_{blk}=X^{1step}_{blk}+\hat{\delta u}$ で補正展開形状を得る。
+- **入力**：製品→展開変形の **3D RIMD特徴**（辺の回転差ログ $\phi_{ij}\in\mathbb{R}^3$、頂点の $\log S_i\in\mathbb{R}^6$）＋補助幾何。
+- **出力**：展開形状での頂点ごとの 2D 変位 $\delta u$（標準化後の値）。
+- **前提**：節点対応は一致、製品形状は3D、展開形状はz=0平面、規模は **V=1071**、Eは概ね $\approx 2V$。
 - **ねらい**：RIMDの**回転不変**・**局所性**を活かして学習を安定化しつつ、再構成ソルバ無しで**高速推論**。
 
 ---
@@ -16,8 +16,8 @@
 1) **RIMDを条件に採用**  
    - 回転・並進に不変で、曲げ主導の変形で分布が安定。形状間一般化に有利。
 
-2) **ターゲットは座標誤差（Δx,Δy）**  
-   - 直接加算で補正完了、ARAP/Poisson系の再構成不要 → **実装がシンプル**・**推論が高速**。  
+2) **ターゲットは座標誤差（Δx,Δy）**
+   - 直接加算で補正完了、ARAP/Poisson系の再構成不要 → **実装がシンプル**・**推論が高速**。
    - ターゲット次元が $2V$ と低めで**少データ（100ケース）でも安定**。
 
 3) **順列不変な条件エンコーダ＋ノード共有デコーダ**  
@@ -37,42 +37,45 @@
 ## 2. データ仕様・前処理
 
 ### 2.1 生データ
-- ノード単位のxyz座標値(1step法:step_blk_coord_x/step_prod_coord_x, 逐次解析:nv_blk_coord_x/nv_prod_coord_x 等)はdf_node.pklに保存済み。
+- ノード単位の座標値はdf_node.pklに保存済み：
+  - **製品形状（3D）**: step_prod_coord_x/y/z, nv_prod_coord_x/y/z
+  - **展開形状（2D）**: step_blk_coord_x/y, nv_blk_coord_x/y（z=0平面）
   - NodeIDがcaseごとに1~1071まで与えられている。
 - 要素単位の構成情報データ(ElementID n1 n2 n3 n4)はdf_element.pklに保存済み。
 - 両方ともcaseカラムでケースNoを識別（No001, No002, ...）
 
-### 2.2 三角化と RIMD 算出
-- 四角形メッシュは**一貫規約の対角線**で三角化（全ケース同一規約）。  
-- ブランク展開形状→製品形状の対で、各頂点の**変形勾配** $T_i$ を cotan 重み一環最小二乗で推定、**極分解** $T_i=R_iS_i$。  
+### 2.2 三角化と 3D RIMD 算出
+- 四角形メッシュは**一貫規約の対角線**で三角化（全ケース同一規約）。
+- **製品1step → 展開1step変形**：製品1step形状（3D）から展開1step形状（2D）への変形で、各頂点の**3D→2D変形勾配** $T_i\in\mathbb{R}^{3\times3}$ を cotan 重み一環最小二乗で推定、**極分解** $T_i=R_iS_i$。
 
-- **RIMD**：  
-  - 辺：$\phi_{ij}=\log(R_i^T R_j)\in\mathbb{R}^3$
-  - 頂点：$\sigma_i=\log S_i\in\mathbb{R}^6$
+- **3D RIMD特徴**：
+  - 辺：$\phi_{ij}=\log(R_i^T R_j)\in\mathbb{R}^3$ （SO(3)の軸角表現）
+  - 頂点：$\sigma_i=\log S_i\in\mathbb{R}^6$ （3×3対称行列の上三角成分）
 
-### 2.3 ターゲット（座標誤差）
-- $\delta u_i=(x^{nv}_i-x^{1step}_i,\; y^{nv}_i-y^{1step}_i)$
+### 2.3 ターゲット（展開形状での座標誤差）
+- **展開形状での座標誤差**：$\delta u_i=(x^{nv\\_blk}_i-x^{1step\\_blk}_i,\; y^{nv\\_blk}_i-y^{1step\\_blk}_i)$
+- 製品→展開変形のRIMD特徴から展開形状での解析誤差を予測
 
 ### 2.4 入出力テンソル（ケース No001 の例）
 ```
  No001/
-  rimd_edges_1step.npy   # [E, 3]   φ^1step_ij
-  rimd_nodes_1step.npy   # [V, 6]   σ^1step_i
+  rimd_edges_1step.npy   # [E, 3]   φ^1step_ij (製品→展開変形のRIMD)
+  rimd_nodes_1step.npy   # [V, 6]   σ^1step_i (製品→展開変形のRIMD)
   edge_index.npy         # [2, E]   (i, j)
-  delta_xy.npy           # [V, 2]   (Δx, Δy)
-  xy_1step.npy           # [V, 2]   1step座標（後処理用）
-  xy_nv.npy              # [V, 2]   逐次解析座標（評価用）
+  delta_xy.npy           # [V, 2]   展開形状での座標誤差 (nv_blk - 1step_blk)
+  xy_1step.npy           # [V, 2]   展開1step座標（後処理用）
+  xy_nv.npy              # [V, 2]   展開逐次解析座標（評価用）
   geometry_features.npy  # [V, Gn]  補助幾何特徴（面積、角度等）
   edge_geometry.npy      # [E, Ge]  辺の幾何特徴
 ```
 
 ### 2.5 標準化（データセット基準）
-1. **代表寸法 $S$**：train の 1step 座標から BB 対角長の**中央値**を採用（データセット一定）。  
+1. **代表寸法 $S$**：train の展開1step座標から BB 対角長の**中央値**を採用（データセット一定）。
    $\tilde{\delta u}=\delta u/S$ で粗スケーリング（数値安定・相似性付与）。
-2. **Z標準化**（train で fit、全 split に適用）：  
-   - 辺：$[\phi,\text{geo\_edge}]\ \Rightarrow\ (\mu_e,\sigma_e)$  
-   - 頂点：$[\sigma,\text{geo\_node}]\ \Rightarrow\ (\mu_v,\sigma_v)$  
-   - ターゲット：$\tilde{\delta u}\ \Rightarrow\ (\mu_y,\sigma_y)$  
+2. **Z標準化**（train で fit、全 split に適用）：
+   - 辺：$[\phi,\text{geo\_edge}]\ \Rightarrow\ (\mu_e,\sigma_e)$ （製品→展開RIMD特徴）
+   - 頂点：$[\sigma,\text{geo\_node}]\ \Rightarrow\ (\mu_v,\sigma_v)$ （製品→展開RIMD特徴）
+   - ターゲット：$\tilde{\delta u}\ \Rightarrow\ (\mu_y,\sigma_y)$ （展開形状での座標誤差）
 3. **逆変換**（推論）：$\hat{\delta u}=((\hat y\cdot\sigma_y+\mu_y)\cdot S)$
 
 > スケーラは 保存（$\mu,\sigma,S$）。辺・頂点・ターゲットで**別々**に管理。
@@ -82,9 +85,9 @@
 ## 3. モデル設計
 
 ### 3.1 入力特徴
-- **エッジ特徴**：$[\ \phi^{1step}_{ij}\ (3);\ \text{geo\_edge}_{ij}\ (Ge)\ ]$  
-- **ノード特徴**：$[\ \sigma^{1step}_i\ (6);\ \text{geo\_node}_i\ (Gn);\ \bar{\phi}^{1step}_i\ (3);\ (x^{1step}_i,y^{1step}_i)\ (2)\ ]$  
-  - $\bar{\phi}^{1step}_i$：頂点 i の一環辺 $\phi$ の平均（近傍曲げ強度の簡易要約）。
+- **エッジ特徴**：$[\ \phi^{prod\rightarrow blk}_{ij}\ (3);\ \text{geo\_edge}_{ij}\ (Ge)\ ]$
+- **ノード特徴**：$[\ \sigma^{prod\rightarrow blk}_i\ (6);\ \text{geo\_node}_i\ (Gn);\ \bar{\phi}^{prod\rightarrow blk}_i\ (3);\ (x^{1step\\_blk}_i,y^{1step\\_blk}_i)\ (2)\ ]$
+  - $\bar{\phi}^{prod\rightarrow blk}_i$：頂点 i の一環辺 $\phi$ の平均（製品→展開変形の近傍変形強度）。
 
 ### 3.2 ベースライン（非VAE：条件付き回帰 MLP）
 - **Edge-Enc-MLP**：in=(3+Ge) → 128（GELU＋LayerNorm）→ **mean-pool** → $h_e\in\mathbb{R}^{128}$
